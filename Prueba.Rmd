@@ -1,0 +1,358 @@
+---
+title: "PRACTICA AC"
+author: "MIGUEL BALSALOBRE"
+date: "2024-12-10"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## **INTRODUCCION**
+SIN HACER
+Esta práctica consiste en el entrenamiento y construccion de distintos modelos de aprendizaje supervisados respecto a un conjunto de datos aportados. 
+
+
+
+El primer paso antes de comenzar a realizar la practica es cargar nuestro conjunto de datos y separarlo en nuestro conjunto de datos de entrenamiento y de test. Para ello, realizamos los siguientes :
+```{r}
+# Primero cargamos todas las librerías necesarias para la practica
+library(caret)
+library(ggplot2)
+library(corrplot)
+library(gridExtra)
+library(pROC)
+
+# Cargamos los datos que vamos a utilizar para entrenar a nuestro modelo en la variable credit
+credit <- read.table("crx.data", 
+                     sep=",", 
+                     na.strings="?")
+
+# Cargamos los índices proporcionados para train/test
+credit.trainIdx <- readRDS("credit.trainIdx.rds")
+
+# Dividimos los datos en train y test
+credit.Datos.Train <- credit[credit.trainIdx,]
+credit.Datos.Test <- credit[-credit.trainIdx,]
+
+# Verificamos las dimensiones para comprobar que todo esta correctamente
+nrow(credit.Datos.Train)  # Debe ser 553
+nrow(credit.Datos.Test)   # Debe ser 137
+
+```
+## **PREPROCESAMIENTO DE DATOS**
+
+```{r}
+```
+### Analisis de Variables
+
+Para comenzar nuestro analisis, vamos a realizar una serie de visualizaciones de nuestras variables para identificar cuantas son, de que tipo son, cuantas observaciones tiene cada una y cual es la variable objetivo.
+
+```{r}
+
+# Visualizamos la estructura de los datos
+str(credit)
+```
+Podemos observar a simple vista que nuestro conjunto de datos está dividido en 16 variables tanto categoricas como numericas, con un total de 690 
+
+```{r}
+# Resumen estadístico de las variables para ver los tipos
+summary(credit)
+```
+Ahora podemos observar con mas detalle los tipos de cada variable.<br>
+Podemos ver que las variables ***V2, V3, V4, V8, V11, V14 y V15*** son numericas.<br>
+Las variables ***V1, V4, V5, V6, V7, V9, V10, V12, V13*** y ***V6*** son categoricas.<br>
+
+Vamos a comprobar para cada variable si existen valores no definidos que deberemos tratar mas adelante.
+```{r}
+# Verificamos valores faltantes para cada variable
+na_count <- colSums(is.na(credit))
+print(na_count)
+```
+Podemos ver que tenemos 7 variables a las que le faltan datos. Mas adelante profundizaremos y las trataremos.
+
+
+De momento vamos a modificar nuestro conjunto de datos para que sea mas facil utilizarlo, vamos a eliminar la cabecera, y a sustituir los valores NA por el signo **"?"**. 
+Además, vamos a renombrar las variables por comodidad para que sean mas legibles, y vamos a identificar nuestra **variable objetivo**, que sera **V16**, la cual llamaremos ***Class***
+```{r}
+# Ver las primeras filas
+head(credit)
+
+
+
+# Modificamos el comando de carga ya que los datos tienen una estructura específica
+credit <- read.csv(unz("credit+approval.zip", "crx.data"), 
+                   header=FALSE, 
+                   sep=",", 
+                   na.strings="?")
+
+
+
+# Nombramos las columnas de manera descriptiva
+names(credit) <- c("A1", "A2", "A3", "A4", "A5", "A6", "A7", "A8", 
+                   "A9", "A10", "A11", "A12", "A13", "A14", "A15", "Class")
+```
+
+Volvemos a almacenar los NA de cada variable ya que hemos modificado nuestro conjunto de datos 
+```{r}
+na_count <- colSums(is.na(credit))
+```
+
+A continuacion vamos a convertir las variables categoricas a factores, ya que a la hora de construir algunos modelos, como Random Forest, estos exigen que las variables categóricas estén en formato de factor. Ademas, esto permite facilitar el analisis exploratorio de dichas variables.
+
+```{r}
+cat_vars <- c("A1","A4","A5","A6","A7","A9","A10","A12","A13","Class")
+credit[cat_vars] <- lapply(credit[cat_vars], FUN=as.factor)
+```
+
+
+Ahora vamos a realizar un analisis basico de cada variable para ver sus principales caracteristicas:
+```{r}
+# Análisis básico de las variables categóricas
+for(var in cat_vars) {
+  print(paste("Distribución de", var))
+  print(table(credit[[var]], useNA="ifany"))
+}
+
+# Análisis básico de las variables numéricas
+num_vars <- setdiff(names(credit), cat_vars)
+summary(credit[num_vars])
+```
+
+Empezando por las variables categoricas, podemos ver como es la distribucion de frecuencias de cada variable, mostrando para cada categoria el numero de observaciones.<br>
+Ademas, en caso de valores NA, tambien se muestran. 
+
+De aqui podemos destacar que la mayoria de variables tienen pocas categorias, lo que no significara un problema en cuanto a rendimiento para aplicar los distintos modelos.<br>
+La variable A6, que tiene 13 categorias, quizas podria tener un pequeño impacto con el uso de algunos modelos, por lo que se podria plantear utilizar alguna estrategia para reducirla. Mas adelante decidiremos.
+
+
+En cuanto a las numericas, el summary no es muy visual, por lo que vamos a representarlas con sus histogramas y sus boxplots
+
+```{r}
+# Histogramas para variables numéricas
+for(var in num_vars) {
+  p <- ggplot(credit, aes_string(x=var)) +
+    geom_histogram(bins=30, fill="blue", alpha=0.5) +
+    theme_minimal() +
+    ggtitle(paste("Distribución de", var))
+  print(p)
+}
+
+# Boxplots para ver relación con la clase
+for(var in num_vars) {
+  p <- ggplot(credit, aes_string(x="Class", y=var)) +
+    geom_boxplot() +
+    theme_minimal() +
+    ggtitle(paste(var, "por Clase"))
+  print(p)
+}
+```
+
+
+
+### Tratamiento de valores nulos y outliers
+
+En este apartado vamos a comenzar a tratar nuestros datos y prepararlos para el entrenamiento de los modelos.<br>
+Primero analizaremos en detalle los valores faltantes y los valores atipicos, y posteriormente los trataremos en base a las conclusiones del analisis.<br>
+# 1. Análisis detallado de valores faltantes
+```{r}
+missing_analysis <- data.frame(
+  n_missing = colSums(is.na(credit)),
+  pct_missing = round(colSums(is.na(credit))/nrow(credit)*100, 2)
+)
+print("Análisis de valores faltantes:")
+print(missing_analysis[missing_analysis$n_missing > 0,])
+```
+Podemos ver que ninguna variable supera el 2% de valores faltantes, por lo que no supone un problema y podremos manejar los datos sin perder mucha informacion.
+
+```{r}
+# 2. Identificar variables numéricas y categóricas
+num_vars <- sapply(credit, is.numeric)
+cat_vars <- sapply(credit, is.factor)
+
+#YO CREO QUE ESTO SOBRA
+# 3. Revisar desbalanceo en variables categóricas
+cat_balance <- lapply(credit[,cat_vars], table)
+print("Distribución de variables categóricas:")
+print(cat_balance)
+```
+# 2. Análisis detallado de valores atipicos
+A continuacion vamos a analizar los outliers de cada variable numerica para determinar que hacemos con ellos.
+```{r}
+
+# 4. Identificar valores extremos en variables numéricas
+boxplot_stats <- lapply(credit[,num_vars], boxplot.stats)
+outliers_count <- sapply(boxplot_stats, function(x) length(x$out))
+# Calcular el porcentaje de outliers por variable
+outliers_percentage <- round(outliers_count / nrow(credit) * 100, 2)
+# Mostrar los resultados
+outliers_summary <- data.frame(
+  n_outliers = outliers_count,
+  pct_outliers = outliers_percentage
+)
+
+#Porcentaje de outliers por variable numérica:
+outliers_summary
+```
+
+En la tabla superior podemos ver un resumen del numero de outliers y su porcentaje respecto al total de datos de cada variable numerica.
+
+Podemos observar que todas las variables numericas tienen algun valor atipico a excepcion de A4.<br> 
+Si nos fijamos en los porcentajes, observamos que **A8, A11 y A15** son las variables con mas outliers, con un porcentaje como minimo del 9.13% y llegando hasta el 16.23%. <br>
+Se trata de unos porcentajes importantes, puesto que la aparicion de outliers afectan a la construccion de algunos modelos, como los de regresion lineal o los basados en distancias, como k-means, por lo que va a ser muy importante tratarlos correctamente para la construccion de nuestros modelos.
+
+# 3. Tratamiento de valores faltantes
+
+Para el tratamiento de valores faltantes, podemos optar por dos opciones: al contener nuestras variables pocos valores NA, como ya hemos visto en su tabla correspondiente, podemos optar por eliminar las filas con estos valores.<br> O por otro lado, podemos sustituir esos valores por algun valor relacionado con cada variable para que no afecte mucho en su distribucion.
+
+En nuestro caso, vamos a optar por imputar los valores faltantes para intentar no modificar en la medida de lo posible la estructura inicial de los datos.
+
+Ahora, tenemos que decidir que valores vamos a utilizar. 
+
+En el caso de las variables categoricas, el valor mas representativo para utilizar es la moda, ya que al tratarse del valor mas frecuente, el introducirlo en unos pocos valores mas no va a generar un sesgo significativo y no va a alterar la distribucion original de la variable.<br>
+
+En el caso de las variables numericas, entre varias opciones, podemos optar por utilizar la media o la mediana. Sin embargo, como ya hemos comprobado que existen valores atipicos, podemos descartar la opcion de la media puesto que esta suele verse alterada con la existencia de dichos valores, ya que pueden desplazarla hacia un lado en caso de que los valores atipicos sean muy grandes o muy pequeños.<br> La mediana por su parte, es mas robusta ante la aparicion de outliers y preserva mejor la distribucion de los datos, por lo que sera nuestra opcion a utilizar.
+
+
+Imputamos los valores con las opciones elegidas y almacenamos los nuevos datos en la variable **credit_clean**.
+```{r}
+# Para variables numéricas: mediana
+# Para variables categóricas: moda
+preproc_na <- function(x) {
+  if(is.numeric(x)) {
+    x[is.na(x)] <- median(x, na.rm = TRUE)
+  } else if(is.factor(x)) {
+    mode_val <- names(sort(table(x), decreasing = TRUE))[1]
+    x[is.na(x)] <- mode_val
+  }
+  return(x)
+}
+
+credit_clean <- as.data.frame(lapply(credit, preproc_na))
+```
+
+# 4. Tratamiento de valores atipicos
+
+Una vez tratados los valores faltantes, toca tratar los valores atipicos. 
+
+
+Como ya hemos visto, en algunas variables tenemos porcentajes algo elevados, por lo que no podemos dejarlos como estan y debemos aplicar alguna estrategia para reducirlos. 
+
+
+En nuestro caso, hemos optado por utilizar el metodo IQR (Rango Intercuartílico) para identificar y tratar los valores atípicos en nuestras variables numericas.
+
+El método IQR funciona analizando la dispersión de los datos en el rango intercuartílico, es decir, la diferencia entre el tercer cuartil (Q3, que representa el percentil 75) y el primer cuartil (Q1, que representa el percentil 25). Este rango captura el 50% central de los datos, excluyendo los valores más extremos.
+
+Los valores que esten por debajo del límite inferior **(Q1 - 1.5 * IQR)** se reemplazan con el propio límite inferior, y los valores que superan el límite superior se reemplazan con el límite superior **(Q3 + 1.5 * IQR)**. 
+
+Al igual que con los valores faltantes, al reemplazar los valores atipicos en lugar de eliminar las filas en donde aparecen, vamos a evitar la pérdida de información y mantendremos el tamaño original de la muestra.
+
+```{r}
+# Tratamiento de outliers para variables numéricas
+# Usaremos el método IQR para identificar y tratar outliers
+handle_outliers <- function(x) {
+  if(!is.numeric(x)) return(x)
+  
+  q1 <- quantile(x, 0.25)
+  q3 <- quantile(x, 0.75)
+  iqr <- q3 - q1
+  
+  lower_bound <- q1 - 1.5 * iqr
+  upper_bound <- q3 + 1.5 * iqr
+  
+  x[x < lower_bound] <- lower_bound
+  x[x > upper_bound] <- upper_bound
+  return(x)
+}
+
+credit_clean[,num_vars] <- lapply(credit_clean[,num_vars], handle_outliers)
+```
+
+A continuación vamos a normalizar las variables numéricas, transformando dichas variables numéricas en valores estandarizados. Es decir, que tengan distribución con media 0 y varianza 1.
+
+```{r}
+# 3. NormalizaciÃ³n de variables numÃ©ricas
+# Usamos preProcess de caret para normalizar
+preproc_num <- preProcess(credit_clean[,num_vars], method = c("center", "scale"))
+credit_clean[,num_vars] <- predict(preproc_num, credit_clean[,num_vars])
+```
+
+Una vez normalizadas las variables numéricas, se pasa a codificar las variables categóricas lo que permite representar categorías como datos numéricos para que puedan manejarlos los modelos.
+
+```{r}
+# 4. CodificaciÃ³n de variables categÃ³ricas
+# Usamos dummyVars de caret para crear variables dummy
+dummy <- dummyVars(" ~ .", data = credit_clean[,cat_vars])
+credit_dummy <- predict(dummy, credit_clean[,cat_vars])
+```
+
+Después de la normalización de las variables numéricas y la creación de variables dummy, se necesita combinar ambos tipos de datos en un único dataset. El resultado de este dataset es numérico, sin valores faltantes.
+
+```{r}
+# 5. Combinar todo en un dataset final
+credit_final <- cbind(credit_clean[,num_vars], credit_dummy)
+```
+
+Ahora se garantiza que las métricas del modelo sean válidas y representativas de datos no vistos. Asegura que el modelo no esté sobreajustado al conjunto de datos con el que fue entrenado.
+
+```{r}
+# 6. Dividir en train y test usando los Ã­ndices proporcionados
+credit.Datos.Train <- credit_final[credit.trainIdx,]
+credit.Datos.Test <- credit_final[-credit.trainIdx,]
+```
+
+Luego se pasa primeramente a confirmar que después del preprocesamiento no hay valores faltantes. Se verificar que las variables numéricas tengan media cercana a 0 y desviación estándar cercana a 1 y para terminar nos aseguramos que los datasets estén correctamente y contengan las dimensiones esperadas.
+
+```{r}
+# Verificar que no hay valores faltantes
+print("Valores faltantes despuÃ©s del preprocesado:")
+print(colSums(is.na(credit.Datos.Train)))
+
+# Verificar la normalizaciÃ³n de variables numÃ©ricas
+print("Resumen de variables numÃ©ricas despuÃ©s de la normalizaciÃ³n:")
+print(summary(credit.Datos.Train[,num_vars]))
+
+# Verificar las dimensiones finales
+print("Dimensiones del conjunto de entrenamiento:")
+print(dim(credit.Datos.Train))
+print("Dimensiones del conjunto de test:")
+print(dim(credit.Datos.Test))
+
+library(corrplot)
+library(caret)
+
+```
+
+
+### Eliminación de variables superfluas
+### Transformación de los datos
+
+
+## **ENTRENAMIENTO DE MODELOS**
+### Modelos utilizados
+### Selección de mejores hiper-parámetros
+
+## **COMPARACION DE MODELOS**
+
+## **CONCLUSIONES**
+
+## **VALORACIONES PERSONALES**
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+summary(cars)
+```
+
+### Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
