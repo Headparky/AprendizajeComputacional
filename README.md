@@ -1,1 +1,3 @@
-# ac-2425
+# Aprendizaje Computacional
+
+* **Juan Hernández López** - juanhernandezlopez03@gmail.com
