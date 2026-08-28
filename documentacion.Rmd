@@ -1,6 +1,6 @@
 ---
 title: "PRACTICA AC"
-author: "MIGUEL BALSALOBRE"
+author: "JUAN HERNÁNDEZ LÓPEZ"
 date: "2024-12-10"
 output: html_document
 ---
